@@ -18,6 +18,7 @@ BRANCH = "pro-python-3"
 VERSION_CHECK_URL = "https://raw.githubusercontent.com/agrc/geocoding-toolbox/{}/tool-version.json".format(BRANCH)
 RATE_LIMIT_SECONDS = (0.1, 0.3)
 UNIQUE_RUN = time.strftime("%Y%m%d%H%M%S")
+GEOCODE_HOST = 'geocoder'
 
 
 def api_retry(api_call):
