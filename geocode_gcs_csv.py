@@ -1,7 +1,5 @@
 """
 Script tool for ArcGIS which geocodes a table of addresses and produces a new table of the results.
-
-@author: kwalker
 """
 from urllib import parse, request, error
 import csv
@@ -11,14 +9,16 @@ import time
 import random
 import re
 from google.cloud import storage
-
+import logging
+import sys
+import argparse
 
 VERSION_NUMBER = "4.0.0"
 BRANCH = "pro-python-3"
 VERSION_CHECK_URL = "https://raw.githubusercontent.com/agrc/geocoding-toolbox/{}/tool-version.json".format(BRANCH)
-RATE_LIMIT_SECONDS = (0.1, 0.3)
+RATE_LIMIT_SECONDS = (0.015, 0.03)
 UNIQUE_RUN = time.strftime("%Y%m%d%H%M%S")
-GEOCODE_HOST = 'geocoder'
+GEOCODE_HOST = 'http://webapi-api/'
 
 
 def api_retry(api_call):
@@ -49,11 +49,19 @@ def get_version(check_url):
         return None
 
 
+class Configs(object):
+    """Store input and output configs."""
+
+    def __init__(self, apiKey, inputTable, inputBucket, idField, addressField, zoneField, locator, spatialRef, outputDir, outputBucket, outputFileName):
+        """Ctor."""
+        pass
+
+
 class Geocoder(object):
     """Geocode and address and check api keys."""
 
     _api_key = None
-    _url_template = "http://api.mapserv.utah.gov/api/v1/geocode/{}/{}?{}"
+    _url_template = GEOCODE_HOST + "api/v1/geocode/{}/{}?{}"
 
     def __init__(self, api_key, spatialReference, locator):
         """Constructor."""
@@ -73,7 +81,7 @@ class Geocoder(object):
     @api_retry
     def isApiKeyValid(self):
         """Check api key against known address."""
-        apiCheck_Url = "http://api.mapserv.utah.gov/api/v1/geocode/{}/{}?{}"
+        apiCheck_Url = GEOCODE_HOST + "api/v1/geocode/{}/{}?{}"
         params = parse.urlencode({"apiKey": self._api_key})
         url = apiCheck_Url.format(parse.quote("270 E CENTER ST"), "LINDON", params)
         try:
@@ -88,16 +96,16 @@ class Geocoder(object):
         elif r.getcode() is not 200 or response["status"] is not 200:
             return "Error: " + str(response["message"])
         else:
-            return "Api key is valid."
+            return "Api key is valid"
 
     @api_retry
     def locateAddress(self, formattedAddress):
         """Create URL from formatted address and send to api."""
-        apiCheck_Url = "http://api.mapserv.utah.gov/api/v1/geocode/{}/{}?{}"
+        apiCheck_Url = GEOCODE_HOST + "api/v1/geocode/{}/{}?{}"
         params = parse.urlencode({"spatialReference": self._spatialRef,
-                                         "locators": self._locator,
-                                         "apiKey": self._api_key,
-                                         "pobox": "true"})
+                                  "locators": self._locator,
+                                  "apiKey": self._api_key,
+                                  "pobox": "true"})
         url = apiCheck_Url.format(parse.quote(formattedAddress.address),
                                   parse.quote(formattedAddress.zone),
                                   params)
@@ -273,7 +281,7 @@ class TableGeocoder(object):
         addressId = formattedAddr.id
         # Locator response Error
         if coderResponse is None:
-            print("Address ID {} failed".format(addressId))
+            log.info("Address ID {} failed".format(addressId))
             # Handle bad response
             currentResult = AddressResult(addressId, "", "", locatorErrorText, "", "", "", "", "")
             self._HandleCurrentResult(currentResult, outputFullPath, outputCursor)
@@ -317,18 +325,19 @@ class TableGeocoder(object):
         # Test api key before we get started
         apiKeyMessage = geocoder.isApiKeyValid()
         if apiKeyMessage is None:
-            print("Geocode service failed to respond on api key check")
+            log.info("Geocode service failed to respond on api key check")
             return
         elif "Error:" in apiKeyMessage:
-            print(apiKeyMessage)
+            log.info(apiKeyMessage)
             return
         else:
-            print(apiKeyMessage)
+            log.info(apiKeyMessage)
 
-        print("Begin Geocode.")
+        log.info("Begin Geocode")
         AddressResult.addHeaderResultCSV(outputFullPath)
         sequentialBadRequests = 0
         rowNum = 1
+        one_k_start = time.time()
         outCursor = None
         with open(self._inputTable) as csvInput:
             reader = csv.DictReader(csvInput)
@@ -361,7 +370,7 @@ class TableGeocoder(object):
                                                                                                   outputFullPath))
                             else:
                                 error_msg = error_msg.format("")
-                            print(error_msg)
+                            log.info(error_msg)
 
                             return
 
@@ -374,6 +383,11 @@ class TableGeocoder(object):
                                                       "Error: Address invalid or NULL fields", "", "", "", "", "")
                         self._HandleCurrentResult(currentResult, outputFullPath, outCursor)
 
+                if rowNum % 1000 == 0:
+                    one_k_end = time.time() - one_k_start
+                    one_k_end = round(one_k_end, 3)
+                    log.info('Rows geocoded %d | seconds %f', rowNum, one_k_end)
+                    one_k_start = time.time()
                 rowNum += 1
                 sequentialBadRequests = 0
 
@@ -386,7 +400,7 @@ def list_blobs(bucket_name):
     blobs = bucket.list_blobs()
 
     for blob in blobs:
-        print(blob.name)
+        log.info(blob.name)
 
 def download_blob(bucket_name, source_blob_name, destination_file_name):
     """Downloads a blob from the bucket."""
@@ -395,10 +409,6 @@ def download_blob(bucket_name, source_blob_name, destination_file_name):
     blob = bucket.blob(source_blob_name)
 
     blob.download_to_filename(destination_file_name)
-
-    print('Blob {} downloaded to {}.'.format(
-        source_blob_name,
-        destination_file_name))
 
 
 def upload_blob(bucket_name, source_file_name, destination_blob_name):
@@ -409,36 +419,76 @@ def upload_blob(bucket_name, source_file_name, destination_blob_name):
 
     blob.upload_from_filename(source_file_name)
 
-    print('File {} uploaded to {}.'.format(
-        source_file_name,
-        destination_blob_name))
+
+def _setup_logging():
+    log = logging.getLogger('geocoder')
+    log.setLevel(logging.DEBUG)
+    log_formatter = logging.Formatter(fmt='%(message)s')
+    log.logThreads = 0
+    log.logProcesses = 0
+
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.DEBUG)
+    console_handler.setFormatter(log_formatter)
+    log.addHandler(console_handler)
 
 
 if __name__ == "__main__":
-    apiKey = 'AGRC-2E323E4B730498'
-    inputTable = '/tmp/inputdata.csv'
-    inputBucket = 'geocoder-csv-storage-95728'
-    idField = 'INID'
-    addressField = 'INADDR'
-    zoneField = 'INZONE'
+    # ex command: python geocode-gcs-csv.py --apikey AGRC-Explorer --input_bucket geocoder-csv-storage-95728 --input_csv GeocodeResults_20180924170752.csv --output_bucket geocoder-csv-results-98576 --no_download --no_upload
+
+    inputTable = './tmp/inputdata.csv'
     locator = TableGeocoder.locatorMap['Address points and road centerlines (default)']
     spatialRef = TableGeocoder.spatialRefMap['NAD 1983 UTM Zone 12N']
-    outputDir = r'/tmp'
-    outputBucket = 'geocoder-csv-results-98576'
+    outputDir = r'./tmp'
     outputFileName = "GeocodeResults_" + UNIQUE_RUN + ".csv"
 
-    download_blob(inputBucket,
-                  "GeocodeResults_20180924170752.csv",
-                  inputTable)
+    parser = argparse.ArgumentParser(description='Geocode some addresses')
+
+    parser.add_argument('--apikey', action='store', dest='apikey',
+                        help='Api key for geocoding')
+    parser.add_argument('--input_bucket', action='store', dest='input_bucket',
+                        help='GCS bucket with input data')
+    parser.add_argument('--input_csv', action='store', dest='input_csv',
+                        help='Name of the CSV in input_bucket')
+    parser.add_argument('--id_field', action='store', dest='id_field',
+                        help='ID field in the csv. d')
+    parser.add_argument('--address_field', action='store', dest='address_field',
+                        help='Address field in the csv.')
+    parser.add_argument('--zone_field', action='store', dest='zone_field',
+                        help='Zone field in the csv.')
+    parser.add_argument('--output_bucket', action='store', dest='output_bucket',
+                        help='Name of the CSV in input_bucket')
+    parser.add_argument('--no_download', action='store_true', dest='no_dl',
+                        help='Do not download from GCS. Downloaded data must already be local.')
+    parser.add_argument('--no_upload', action='store_true', dest='no_ul',
+                        help='Do not upload to GCS.')
+    args = parser.parse_args()
+    apiKey = args.apikey
+    inputBucket = args.input_bucket
+    inputCsv = args.input_csv
+    idField = args.id_field
+    addressField = args.address_field
+    zoneField = args.zone_field
+    outputBucket = args.output_bucket
+
+    _setup_logging()
+    global log
+    log = logging.getLogger('geocoder')
+
+    if not args.no_dl:
+        download_blob(inputBucket,
+                      inputCsv,
+                      inputTable)
+        log.info('Downloading %s complete', inputCsv)
 
     outputGeodatabase = None
-
     version = VERSION_NUMBER
-    print("Geocode Table Version " + version)
+    log.info("Geocode Table Version " + version)
     currentVersion = get_version(VERSION_CHECK_URL)
     if currentVersion and VERSION_NUMBER != currentVersion:
-        print('Current version is: {}'.format(currentVersion))
-        print('Please download at: https://github.com/agrc/geocoding-toolbox/raw/{}/AGRC Geocode Tools.tbx'.format(BRANCH))
+        log.info('Current version is: {}'.format(currentVersion))
+        log.info('Please download at: https://github.com/agrc/geocoding-toolbox/raw/{}/AGRC Geocode Tools.tbx'.format(BRANCH))
+
     Tool = TableGeocoder(apiKey,
                          inputTable,
                          idField,
@@ -450,8 +500,12 @@ if __name__ == "__main__":
                          outputFileName,
                          outputGeodatabase)
     Tool.start()
-    print("Geocode completed")
-    upload_blob(outputBucket,
-                os.path.join(outputDir, outputFileName),
-                outputFileName)
-    print("upload completed")
+    log.info("Geocode completed")
+
+    if not args.no_ul:
+        upload_blob(outputBucket,
+                    os.path.join(outputDir, outputFileName),
+                    outputFileName)
+        log.info("Uploading %s complete", outputFileName)
+
+    logging.shutdown()

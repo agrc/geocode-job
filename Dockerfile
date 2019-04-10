@@ -1,4 +1,3 @@
 FROM python:3.7.0-alpine3.7 as base
-COPY geocode-gcs-csv.py /tmp/geocode-gcs-csv.py
-COPY geocode-key.json /tmp/geocode-key.json
+COPY geocode_gcs_csv.py /tmp/geocode_gcs_csv.py
 RUN pip install --upgrade google-cloud-storage
