@@ -1,8 +1,7 @@
 # Geocode-job
 
-Run a containerized python geocoding script as a kubernetes job.
+Create a containerized python geocoding script as a kubernetes job.
 
-# add sub commands
 ### Steps to run
 1. Prepare data
     1. Run [prep_addresses.py](vista/prep_addresses.py)
@@ -15,7 +14,7 @@ Run a containerized python geocoding script as a kubernetes job.
 1. Apply seceret for service worker with cloud storage permissions to k8s cluster
     1. authorize kubectl with geocoding api cluster
     1. run `kubectl apply -f .secrets/gcs-secret.yml`
-        - Service account key must first be base64 encoded into [gcs-secret.yml](.secrets/gcs-secret.yml.template)
+        - Service account key must first be base64 encoded into [gcs-secret.yml](.secrets/gcs-secret-template.yml.jinja2)
 1. Apply job yamls to cluster 
     1. run `kubectl apply -f job.yaml`
 1. Download geocoded CSVs from cloud storage
