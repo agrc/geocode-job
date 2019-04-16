@@ -81,7 +81,7 @@ def create_secret_yml(secret_template_dir, secret_template_name, gcs_key_name, u
 
 if __name__ == '__main__':
     csv_directory = 'data/job_uploads'
-    id_field = 'RESIDENCE_ID'
+    id_field = 'UNIQUE_ID'
     address_field = 'VISTA_ADDRESS'
     zone_field = 'VISTA_CITY'
     upload_bucket = 'geocoder-csv-storage-95728'
